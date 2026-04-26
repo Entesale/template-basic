@@ -1,4 +1,7 @@
 {
-  "private": true,
-  "type": "module"
+    "name": "@entesale/template",
+    "type": "module",
+    "dependencies": {
+        "opencode-ai": "1.14.25"
+    }
 }

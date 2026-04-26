@@ -1,1 +1,4 @@
-!node_modules
+# Per-agent runtime data — never committed, preserved through git resets
+workspace/
+conversation.json
+*.log
