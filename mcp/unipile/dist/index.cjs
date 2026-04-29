@@ -17036,18 +17036,31 @@ function createHttpBridge(baseUrl, apiKey, accountIds) {
       return req("GET", `/api/v1/accounts/${id}/sync`);
     },
     // ── Messaging ────────────────────────────────────────────────────────
-    async listChats({ account_id, limit = 50, cursor }) {
+    async listChats({ account_id, account_type, unread, before, after, limit = 50, cursor }) {
       return req("GET", "/api/v1/chats", void 0, {
         account_id,
+        account_type,
+        unread,
+        before,
+        after,
         limit,
         cursor
       });
     },
-    async getChat(chatId) {
-      return req("GET", `/api/v1/chats/${chatId}`);
+    async getChat(chatId, account_id) {
+      return req(
+        "GET",
+        `/api/v1/chats/${encodeURIComponent(chatId)}`,
+        void 0,
+        account_id ? { account_id } : void 0
+      );
     },
-    async getChatMessages(chatId, limit = 50, cursor) {
-      return req("GET", `/api/v1/chats/${chatId}/messages`, void 0, {
+    async getChatMessages(chatId, params = {}) {
+      const { sender_id, before, after, limit = 50, cursor } = params;
+      return req("GET", `/api/v1/chats/${encodeURIComponent(chatId)}/messages`, void 0, {
+        sender_id,
+        before,
+        after,
         limit,
         cursor
       });
@@ -17189,8 +17202,8 @@ function createHttpBridge(baseUrl, apiKey, accountIds) {
       });
     },
     // ── LinkedIn ─────────────────────────────────────────────────────────
-    async linkedinSearch(account_id, params) {
-      return req("POST", "/api/v1/linkedin/search", { account_id, ...params });
+    async linkedinSearch(account_id, body) {
+      return req("POST", "/api/v1/linkedin/search", body, { account_id });
     },
     async getLinkedinCompany(account_id, identifier) {
       return req(
@@ -17248,14 +17261,34 @@ function createProxyBridge(proxyBaseUrl, agentToken, accountIds) {
     async syncAccount(id) {
       return req("GET", `/api/v1/accounts/${id}/sync`);
     },
-    async listChats({ account_id, limit = 50, cursor }) {
-      return req("GET", "/api/v1/chats", void 0, { account_id, limit, cursor });
+    async listChats({ account_id, account_type, unread, before, after, limit = 50, cursor }) {
+      return req("GET", "/api/v1/chats", void 0, {
+        account_id,
+        account_type,
+        unread,
+        before,
+        after,
+        limit,
+        cursor
+      });
     },
-    async getChat(chatId) {
-      return req("GET", `/api/v1/chats/${chatId}`);
+    async getChat(chatId, account_id) {
+      return req(
+        "GET",
+        `/api/v1/chats/${encodeURIComponent(chatId)}`,
+        void 0,
+        account_id ? { account_id } : void 0
+      );
     },
-    async getChatMessages(chatId, limit = 50, cursor) {
-      return req("GET", `/api/v1/chats/${chatId}/messages`, void 0, { limit, cursor });
+    async getChatMessages(chatId, params = {}) {
+      const { sender_id, before, after, limit = 50, cursor } = params;
+      return req("GET", `/api/v1/chats/${encodeURIComponent(chatId)}/messages`, void 0, {
+        sender_id,
+        before,
+        after,
+        limit,
+        cursor
+      });
     },
     async sendMessage(chatId, text) {
       return req("POST", `/api/v1/chats/${chatId}/messages`, { text });
@@ -17350,8 +17383,8 @@ function createProxyBridge(proxyBaseUrl, agentToken, accountIds) {
     async listPostReactions(postId, account_id, limit = 20) {
       return req("GET", `/api/v1/posts/${postId}/reactions`, void 0, { account_id, limit });
     },
-    async linkedinSearch(account_id, params) {
-      return req("POST", "/api/v1/linkedin/search", { account_id, ...params });
+    async linkedinSearch(account_id, body) {
+      return req("POST", "/api/v1/linkedin/search", body, { account_id });
     },
     async getLinkedinCompany(account_id, identifier) {
       return req(
@@ -21446,36 +21479,53 @@ async function handleSyncAccount(bridge, input) {
 }
 
 // src/tools/messaging/list-chats.ts
+var ISO_8601_UTC_PATTERN = /^[1-2]\d{3}-[0-1]\d-[0-3]\dT\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 var listChatsToolShape = {
-  account_id: external_exports.string().optional().describe("Filter by a specific Unipile account ID. Use unipile_list_accounts to find IDs."),
-  limit: external_exports.number().int().min(1).max(250).optional().default(50).describe("Max chats to return (default 50)."),
-  cursor: external_exports.string().optional().describe("Pagination cursor from a previous response.")
+  account_id: external_exports.string().min(1).optional().describe(
+    "Filter by Unipile account. A single ID or a comma-separated list of IDs. Use unipile_list_accounts to find IDs."
+  ),
+  account_type: external_exports.enum(["WHATSAPP", "LINKEDIN", "SLACK", "TWITTER", "MESSENGER", "INSTAGRAM", "TELEGRAM"]).optional().describe("Filter chats by provider."),
+  unread: external_exports.boolean().optional().describe("If true, only unread chats are returned. If false, only read chats are returned."),
+  before: external_exports.string().regex(ISO_8601_UTC_PATTERN, "Must be an ISO 8601 UTC datetime (YYYY-MM-DDTHH:MM:SS.sssZ)").optional().describe("Only return chats created strictly before this ISO 8601 UTC datetime."),
+  after: external_exports.string().regex(ISO_8601_UTC_PATTERN, "Must be an ISO 8601 UTC datetime (YYYY-MM-DDTHH:MM:SS.sssZ)").optional().describe("Only return chats created strictly after this ISO 8601 UTC datetime."),
+  limit: external_exports.number().int().min(1).max(250).optional().default(50).describe("Max chats to return (1-250, default 50)."),
+  cursor: external_exports.string().min(1).optional().describe("Pagination cursor from a previous response. Pass to fetch the next page.")
 };
 var listChatsSchema = external_exports.object(listChatsToolShape);
 async function handleListChats(bridge, input) {
-  const { account_id, limit, cursor } = listChatsSchema.parse(input);
-  return bridge.listChats({ account_id, limit, cursor });
+  const params = listChatsSchema.parse(input);
+  return bridge.listChats(params);
 }
 
 // src/tools/messaging/get-chat.ts
 var getChatToolShape = {
-  chat_id: external_exports.string().min(1).describe("Unipile chat ID.")
+  chat_id: external_exports.string().min(1).describe(
+    "The Unipile chat ID, or the provider's native chat ID (e.g. Telegram, LinkedIn, WhatsApp). When passing a provider ID, account_id is required."
+  ),
+  account_id: external_exports.string().min(1).optional().describe(
+    "Unipile account ID. Required when chat_id is a provider's native ID; optional when chat_id is a Unipile ID."
+  )
 };
-var getChatSchema = external_exports.object(getChatToolShape);
+var getChatSchema = external_exports.object(getChatToolShape).strict();
 async function handleGetChat(bridge, input) {
-  return bridge.getChat(getChatSchema.parse(input).chat_id);
+  const { chat_id, account_id } = getChatSchema.parse(input);
+  return bridge.getChat(chat_id, account_id);
 }
 
 // src/tools/messaging/get-chat-messages.ts
+var ISO_8601_UTC_PATTERN2 = /^[1-2]\d{3}-[0-1]\d-[0-3]\dT\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 var getChatMessagesToolShape = {
   chat_id: external_exports.string().min(1).describe("Unipile chat ID. Use unipile_list_chats to find IDs."),
-  limit: external_exports.number().int().min(1).max(250).optional().default(50).describe("Max messages to return (default 50, newest first)."),
-  cursor: external_exports.string().optional().describe("Pagination cursor from a previous response.")
+  sender_id: external_exports.string().min(1).optional().describe("Filter messages by a specific sender ID."),
+  before: external_exports.string().regex(ISO_8601_UTC_PATTERN2, "Must be an ISO 8601 UTC datetime (YYYY-MM-DDTHH:MM:SS.sssZ)").optional().describe("Only return messages created strictly before this ISO 8601 UTC datetime."),
+  after: external_exports.string().regex(ISO_8601_UTC_PATTERN2, "Must be an ISO 8601 UTC datetime (YYYY-MM-DDTHH:MM:SS.sssZ)").optional().describe("Only return messages created strictly after this ISO 8601 UTC datetime."),
+  limit: external_exports.number().int().min(1).max(250).optional().default(50).describe("Max messages to return (1-250, default 50, newest first)."),
+  cursor: external_exports.string().min(1).optional().describe("Pagination cursor from a previous response. Pass to fetch the next page.")
 };
 var getChatMessagesSchema = external_exports.object(getChatMessagesToolShape);
 async function handleGetChatMessages(bridge, input) {
-  const { chat_id, limit, cursor } = getChatMessagesSchema.parse(input);
-  return bridge.getChatMessages(chat_id, limit, cursor);
+  const { chat_id, ...rest } = getChatMessagesSchema.parse(input);
+  return bridge.getChatMessages(chat_id, rest);
 }
 
 // src/tools/messaging/send-message.ts
@@ -21771,16 +21821,83 @@ async function handleListPostReactions(bridge, input) {
 }
 
 // src/tools/linkedin/search.ts
+var apiEnum = external_exports.enum(["classic", "sales_navigator", "recruiter"]);
+var categoryEnum = external_exports.enum(["people", "companies", "jobs", "posts"]);
 var linkedinSearchToolShape = {
-  account_id: external_exports.string().min(1).describe("Unipile account ID for a LinkedIn connection."),
-  query: external_exports.string().min(1).describe("Search query string."),
-  category: external_exports.enum(["people", "companies", "jobs", "posts"]).optional().default("people").describe("What to search for."),
-  limit: external_exports.number().int().min(1).max(50).optional().default(10).describe("Max results to return.")
+  account_id: external_exports.string().min(1).describe("Unipile account ID for the LinkedIn account that runs the search."),
+  // ── Mode A: URL paste ──────────────────────────────────────────────────
+  url: external_exports.string().url().optional().describe(
+    "Mode A. Paste a LinkedIn search URL (Classic, Sales Navigator, or Recruiter \u2014 search results, saved searches, or lead lists). When `url` is set, ignore api/category/keywords/filters and let the URL define the query."
+  ),
+  // ── Mode B: structured search ──────────────────────────────────────────
+  api: apiEnum.optional().describe(
+    "Mode B. LinkedIn surface to query. `classic` = standard LinkedIn (any account). `sales_navigator` = Sales Navigator (subscription required). `recruiter` = LinkedIn Recruiter (subscription required)."
+  ),
+  category: categoryEnum.optional().describe(
+    "Mode B. What to return. Allowed: `people`, `companies`, `jobs`, `posts`. Some categories are only valid on certain APIs (e.g. `posts` on classic, `jobs` not on recruiter)."
+  ),
+  keywords: external_exports.string().optional().describe(
+    'Mode B. Free-text keywords. Boolean operators are supported (e.g. `developer OR engineer`, `"vp sales" AND fintech`).'
+  ),
+  filters: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe(
+    [
+      "Mode B. Provider-specific filter fields, sent verbatim in the request body.",
+      'Common fields: `network_distance: number[]`, `location: number[]`, `industry: { include?: string[]; exclude?: string[] }`, `company: { include?: number[]; exclude?: number[] }`, `tenure: [{ min?: number; max?: number }]`, `profile_language: string[]`, `has_job_offers: boolean`, `role: [{ keywords: string; priority: "MUST_HAVE"|"NICE_TO_HAVE"|"DOESNT_HAVE"; scope: "CURRENT"|"PAST"|"CURRENT_OR_PAST" }]`, `skills: [{ id: string; priority: "MUST_HAVE"|"NICE_TO_HAVE"|"DOESNT_HAVE" }]`.',
+      "ID-based filters (location, industry, skill, company, school) require numeric/string IDs from LinkedIn. Resolve them first via GET /api/v1/linkedin/search/parameters?account_id=...&type=LOCATION|INDUSTRY|SKILL|COMPANY|SCHOOL&keywords=... \u2014 call it through unipile_linkedin_raw if no dedicated tool is available."
+    ].join(" ")
+  ),
+  // ── Pagination ─────────────────────────────────────────────────────────
+  cursor: external_exports.string().min(1).optional().describe("Pagination cursor returned by a previous response. Pass to fetch the next page."),
+  limit: external_exports.number().int().min(1).max(50).optional().default(10).describe("Max results per page (1-50, default 10).")
 };
-var linkedinSearchSchema = external_exports.object(linkedinSearchToolShape);
+var linkedinSearchSchema = external_exports.object(linkedinSearchToolShape).superRefine((value, ctx) => {
+  const usingUrl = typeof value.url === "string" && value.url.length > 0;
+  const usingStructured = value.api !== void 0 || value.category !== void 0 || value.keywords !== void 0 || value.filters !== void 0;
+  if (!usingUrl && !usingStructured) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Provide either `url` (Mode A) or at least `api` + `category` (Mode B)."
+    });
+    return;
+  }
+  if (usingUrl && usingStructured) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Mix conflict: `url` cannot be combined with api/category/keywords/filters. Pick one mode."
+    });
+    return;
+  }
+  if (usingStructured) {
+    if (value.api === void 0) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["api"],
+        message: "`api` is required in structured mode."
+      });
+    }
+    if (value.category === void 0) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["category"],
+        message: "`category` is required in structured mode."
+      });
+    }
+  }
+});
 async function handleLinkedinSearch(bridge, input) {
-  const { account_id, query, category, limit } = linkedinSearchSchema.parse(input);
-  return bridge.linkedinSearch(account_id, { query, category, limit });
+  const parsed = linkedinSearchSchema.parse(input);
+  const { account_id, url, api, category, keywords, filters, cursor, limit } = parsed;
+  const body = { limit };
+  if (url) {
+    body.url = url;
+  } else {
+    body.api = api;
+    body.category = category;
+    if (keywords !== void 0) body.keywords = keywords;
+    if (filters) Object.assign(body, filters);
+  }
+  if (cursor !== void 0) body.cursor = cursor;
+  return bridge.linkedinSearch(account_id, body);
 }
 
 // src/tools/linkedin/get-company.ts
@@ -21838,19 +21955,19 @@ var toolDefinitions = [
   },
   {
     name: "unipile_list_chats",
-    description: "List chats/conversations for a Unipile account. Returns chat IDs, names, last message preview, and unread counts.",
+    description: "List chats across connected Unipile accounts. Supports filtering by account_id (single or comma-separated), account_type (provider), unread status, and creation time window (before/after, ISO 8601 UTC). Cursor-paginated.",
     shape: listChatsToolShape,
     handle: handleListChats
   },
   {
     name: "unipile_get_chat",
-    description: "Get details for a specific chat by chat_id.",
+    description: "Retrieve details of a chat by Unipile chat ID, or by the provider's native chat ID (Telegram, LinkedIn, WhatsApp, etc.) \u2014 when using a provider ID, account_id is required.",
     shape: getChatToolShape,
     handle: handleGetChat
   },
   {
     name: "unipile_get_chat_messages",
-    description: "Retrieve message history from a chat. Returns messages with sender info, timestamps, and content.",
+    description: "Retrieve messages from a chat with sender info, timestamps, and content. Supports filtering by sender_id and a creation time window (before/after, ISO 8601 UTC). Cursor-paginated.",
     shape: getChatMessagesToolShape,
     handle: handleGetChatMessages
   },
@@ -22012,7 +22129,15 @@ var toolDefinitions = [
   },
   {
     name: "unipile_linkedin_search",
-    description: "Search LinkedIn for people, companies, jobs, or posts.",
+    description: [
+      "Search LinkedIn (Classic, Sales Navigator, or Recruiter) for people, companies, jobs, or posts. Two modes:",
+      "Mode A \u2014 URL paste: pass `url` copied from a LinkedIn search/saved search/lead list page; the URL fully defines the query.",
+      "Mode B \u2014 structured: pass `api` (classic | sales_navigator | recruiter), `category` (people | companies | jobs | posts), optional `keywords`, and provider-specific filters via `filters`.",
+      "Common filters in `filters`: network_distance, location (numeric IDs), industry { include/exclude }, company { include/exclude }, tenure [{min,max}], profile_language, has_job_offers, role [{keywords, priority, scope}], skills [{id, priority}].",
+      "ID-based filters (location, industry, skill, company, school) need LinkedIn IDs \u2014 resolve via GET /api/v1/linkedin/search/parameters?type=LOCATION|INDUSTRY|SKILL|COMPANY|SCHOOL&keywords=... (use unipile_linkedin_raw if no dedicated tool).",
+      "Sales Navigator and Recruiter modes require the connected account to have those subscriptions.",
+      "Cursor-paginated; pass the previous response's `cursor` to fetch the next page."
+    ].join(" "),
     shape: linkedinSearchToolShape,
     handle: handleLinkedinSearch
   },
