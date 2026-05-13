@@ -17068,8 +17068,8 @@ function createHttpBridge(baseUrl, apiKey, accountIds) {
     async sendMessage(chatId, text) {
       return req("POST", `/api/v1/chats/${chatId}/messages`, { text });
     },
-    async startChat({ account_id, attendees_ids, text }) {
-      return req("POST", "/api/v1/chats", { account_id, attendees_ids, text });
+    async startChat(params) {
+      return req("POST", "/api/v1/chats", params);
     },
     async getMessage(messageId) {
       return req("GET", `/api/v1/messages/${messageId}`);
@@ -17293,8 +17293,8 @@ function createProxyBridge(proxyBaseUrl, agentToken, accountIds) {
     async sendMessage(chatId, text) {
       return req("POST", `/api/v1/chats/${chatId}/messages`, { text });
     },
-    async startChat({ account_id, attendees_ids, text }) {
-      return req("POST", "/api/v1/chats", { account_id, attendees_ids, text });
+    async startChat(params) {
+      return req("POST", "/api/v1/chats", params);
     },
     async getMessage(messageId) {
       return req("GET", `/api/v1/messages/${messageId}`);
@@ -21540,15 +21540,83 @@ async function handleSendMessage(bridge, input) {
 }
 
 // src/tools/messaging/start-chat.ts
+var recruiterFollowUpSchema = external_exports.object({
+  subject: external_exports.string().describe("Subject for the follow-up message."),
+  text: external_exports.string().describe("Body of the follow-up message."),
+  scheduled_time: external_exports.union([
+    external_exports.object({
+      days: external_exports.number().min(3).max(28).describe("Number of days from now to send the follow-up (3\u201328)."),
+      timezone: external_exports.string().describe("IANA timezone (e.g. 'Europe/Paris', 'America/Phoenix').")
+    }).describe("Schedule by days."),
+    external_exports.object({
+      weeks: external_exports.number().min(1).max(4).describe("Number of weeks from now to send the follow-up (1\u20134)."),
+      timezone: external_exports.string().describe("IANA timezone (e.g. 'Europe/Paris', 'America/Phoenix').")
+    }).describe("Schedule by weeks.")
+  ]).describe("When to send the follow-up. Pass either { days, timezone } or { weeks, timezone }.")
+}).describe(
+  "Schedule a follow-up message. Recruiter PRO accounts only."
+);
+var linkedinClassicSchema = external_exports.object({
+  api: external_exports.literal("classic").describe("Use the classic LinkedIn messaging API. This is the default."),
+  topic: external_exports.enum(["service_request", "request_demo", "support", "careers", "other"]).optional().describe("Required when starting a conversation with a LinkedIn company page."),
+  applicant_id: external_exports.string().optional().describe(
+    "Required when contacting a job applicant. Resolve via the job postings \u2192 applicants endpoints."
+  ),
+  invitation_id: external_exports.string().optional().describe(
+    "Required when replying to a pending invitation that has not been accepted or declined."
+  ),
+  inmail: external_exports.boolean().optional().describe("Set true to start the conversation as an InMail.")
+}).describe("Standard LinkedIn classic messaging options.");
+var linkedinRecruiterSchema = external_exports.object({
+  api: external_exports.literal("recruiter").describe("Use the LinkedIn Recruiter API. Account must subscribe to Recruiter."),
+  signature: external_exports.string().optional().describe("Sender signature appended to the message."),
+  hiring_project_id: external_exports.string().optional().describe("ID of the Recruiter project the chat should belong to."),
+  job_posting_id: external_exports.string().optional().describe("Related job posting ID for an initial outreach to a candidate."),
+  sourcing_channel: external_exports.enum([
+    "JOB_POSTING_RECOMMENDED_MATCHES",
+    "JOB_POSTING",
+    "REFERRAL",
+    "INTERNAL_CANDIDATES",
+    "AUTOMATED_SOURCING",
+    "RECRUITER_SEARCH",
+    "CAREER_SITE"
+  ]).optional().describe("The Recruiter project sourcing channel."),
+  email_address: external_exports.string().optional().describe("Recipient email address \u2014 use when starting via email instead of InMail."),
+  visibility: external_exports.enum(["PUBLIC", "PRIVATE", "PROJECT"]).optional().describe("Conversation visibility within your organization. Defaults to PRIVATE."),
+  follow_up: recruiterFollowUpSchema.optional()
+}).describe("LinkedIn Recruiter messaging options.");
+var linkedinSalesNavigatorSchema = external_exports.object({
+  api: external_exports.literal("sales_navigator").describe("Use the LinkedIn Sales Navigator API. Account must subscribe to Sales Navigator.")
+}).describe("LinkedIn Sales Navigator messaging options.");
+var linkedinSchema = external_exports.discriminatedUnion("api", [
+  linkedinClassicSchema,
+  linkedinRecruiterSchema,
+  linkedinSalesNavigatorSchema
+]).describe("LinkedIn-specific options. Choose `api` to switch between classic, recruiter, or sales_navigator.");
 var startChatToolShape = {
   account_id: external_exports.string().min(1).describe("Unipile account ID to use for the new conversation. Use unipile_list_accounts to find IDs."),
-  attendee_id: external_exports.string().min(1).describe("Provider-native ID of the person to message (e.g. LinkedIn member URN, Telegram user ID)."),
-  text: external_exports.string().min(1).describe("Opening message text.")
+  attendees_ids: external_exports.array(external_exports.string().min(1)).min(1).describe(
+    [
+      "One or more attendee provider IDs (the recipient(s)).",
+      "Instagram: use `provider_messaging_id`.",
+      "LinkedIn members: `provider_id` starting with ACo (classic), ACw (Sales Navigator), or AE (Recruiter).",
+      "LinkedIn companies: use the company `messaging_id`.",
+      "WhatsApp: use the form `00000000@s.whatsapp.net`."
+    ].join(" ")
+  ),
+  text: external_exports.string().optional().describe(
+    [
+      "Opening message body.",
+      'LinkedIn Recruiter supports a limited HTML subset: <strong>, <em>, <a href="\u2026">, <ul>, <ol>, <li> (nestable).'
+    ].join(" ")
+  ),
+  subject: external_exports.string().optional().describe("Optional subject line for the new conversation."),
+  linkedin: linkedinSchema.optional()
 };
 var startChatSchema = external_exports.object(startChatToolShape);
 async function handleStartChat(bridge, input) {
-  const { account_id, attendee_id, text } = startChatSchema.parse(input);
-  return bridge.startChat({ account_id, attendees_ids: [attendee_id], text });
+  const params = startChatSchema.parse(input);
+  return bridge.startChat(params);
 }
 
 // src/tools/messaging/get-message.ts
@@ -21697,13 +21765,13 @@ async function handleListFollowing(bridge, input) {
 // src/tools/network/send-invitation.ts
 var sendInvitationToolShape = {
   account_id: external_exports.string().min(1).describe("Unipile account ID to send the invitation from."),
-  identifier: external_exports.string().min(1).describe("Provider-native identifier of the person to invite (e.g. LinkedIn public identifier or member URN)."),
-  message: external_exports.string().max(300).optional().describe("Optional personalized connection message (LinkedIn: max 300 chars).")
+  provider_id: external_exports.string().min(1).describe("Provider-native identifier of the person to invite (e.g. LinkedIn public identifier or member URN)."),
+  message: external_exports.string().max(150).optional().describe("Optional personalized connection message (LinkedIn: max 150 chars).")
 };
 var sendInvitationSchema = external_exports.object(sendInvitationToolShape);
 async function handleSendInvitation(bridge, input) {
-  const { account_id, identifier, message } = sendInvitationSchema.parse(input);
-  return bridge.sendInvitation(account_id, identifier, message);
+  const { account_id, provider_id, message } = sendInvitationSchema.parse(input);
+  return bridge.sendInvitation(account_id, provider_id, message);
 }
 
 // src/tools/network/list-invitations-sent.ts
@@ -21769,7 +21837,7 @@ var getPostToolShape = {
 var getPostSchema = external_exports.object(getPostToolShape);
 async function handleGetPost(bridge, input) {
   const { account_id, post_id } = getPostSchema.parse(input);
-  return bridge.getPost(account_id, post_id);
+  return bridge.getPost(post_id, account_id);
 }
 
 // src/tools/content/comment-post.ts
@@ -21805,7 +21873,7 @@ var listPostCommentsToolShape = {
 var listPostCommentsSchema = external_exports.object(listPostCommentsToolShape);
 async function handleListPostComments(bridge, input) {
   const { account_id, post_id, limit } = listPostCommentsSchema.parse(input);
-  return bridge.listPostComments(account_id, post_id, limit);
+  return bridge.listPostComments(post_id, account_id, limit);
 }
 
 // src/tools/content/list-post-reactions.ts
@@ -21817,7 +21885,7 @@ var listPostReactionsToolShape = {
 var listPostReactionsSchema = external_exports.object(listPostReactionsToolShape);
 async function handleListPostReactions(bridge, input) {
   const { account_id, post_id, limit } = listPostReactionsSchema.parse(input);
-  return bridge.listPostReactions(account_id, post_id, limit);
+  return bridge.listPostReactions(post_id, account_id, limit);
 }
 
 // src/tools/linkedin/search.ts
@@ -21979,7 +22047,13 @@ var toolDefinitions = [
   },
   {
     name: "unipile_start_chat",
-    description: "Start a new conversation with a user by their provider identifier (e.g. phone number for WhatsApp, LinkedIn URN).",
+    description: [
+      "Start a new conversation with one or more attendees on the chosen account.",
+      "Required: `account_id` and `attendees_ids` (array, min 1).",
+      "Attendee ID format depends on provider \u2014 Instagram: provider_messaging_id; LinkedIn members: provider_id (ACo / ACw / AE prefix); LinkedIn companies: messaging_id; WhatsApp: 00000000@s.whatsapp.net.",
+      "Optional `text` (opening message), `subject`, and `linkedin` for provider-specific options (classic / recruiter / sales_navigator) including InMail, applicant_id, hiring_project_id, sourcing_channel, follow_up scheduling, etc.",
+      "Binary attachments (files, voice, video) are not yet supported by this tool."
+    ].join(" "),
     shape: startChatToolShape,
     handle: handleStartChat
   },
@@ -22063,7 +22137,7 @@ var toolDefinitions = [
   },
   {
     name: "unipile_send_invitation",
-    description: "Send a connection request/invitation to a user. Supports optional personalized message (LinkedIn: max 300 chars).",
+    description: "Send a connection request/invitation to a user. Supports optional personalized message (LinkedIn: max 150 chars).",
     shape: sendInvitationToolShape,
     handle: handleSendInvitation
   },
