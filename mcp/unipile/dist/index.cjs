@@ -17189,10 +17189,14 @@ function createHttpBridge(baseUrl, apiKey, accountIds) {
         reaction
       });
     },
-    async listPostComments(postId, account_id, limit = 20) {
+    async listPostComments(postId, account_id, options) {
+      const { limit = 20, cursor, sort_by, comment_id } = options ?? {};
       return req("GET", `/api/v1/posts/${postId}/comments`, void 0, {
         account_id,
-        limit
+        limit,
+        cursor,
+        sort_by,
+        comment_id
       });
     },
     async listPostReactions(postId, account_id, limit = 20) {
@@ -17377,8 +17381,15 @@ function createProxyBridge(proxyBaseUrl, agentToken, accountIds) {
     async reactToPost(account_id, postId, reaction) {
       return req("POST", "/api/v1/posts/reaction", { account_id, post_id: postId, reaction });
     },
-    async listPostComments(postId, account_id, limit = 20) {
-      return req("GET", `/api/v1/posts/${postId}/comments`, void 0, { account_id, limit });
+    async listPostComments(postId, account_id, options) {
+      const { limit = 20, cursor, sort_by, comment_id } = options ?? {};
+      return req("GET", `/api/v1/posts/${postId}/comments`, void 0, {
+        account_id,
+        limit,
+        cursor,
+        sort_by,
+        comment_id
+      });
     },
     async listPostReactions(postId, account_id, limit = 20) {
       return req("GET", `/api/v1/posts/${postId}/reactions`, void 0, { account_id, limit });
@@ -21867,13 +21878,25 @@ async function handleReactToPost(bridge, input) {
 // src/tools/content/list-post-comments.ts
 var listPostCommentsToolShape = {
   account_id: external_exports.string().min(1).describe("Unipile account ID."),
-  post_id: external_exports.string().min(1).describe("Post ID to list comments for."),
-  limit: external_exports.number().int().min(1).max(100).optional().default(20).describe("Max comments to return.")
+  post_id: external_exports.string().min(1).describe(
+    "Post ID. LinkedIn: use the `social_id` from the post object (the URL id will not always work). Instagram: use the provider_id (not the short code)."
+  ),
+  limit: external_exports.number().int().min(1).max(100).optional().default(20).describe("Max comments to return (1-100)."),
+  cursor: external_exports.string().min(1).optional().describe("Pagination cursor returned by a previous response."),
+  sort_by: external_exports.enum(["MOST_RECENT", "MOST_RELEVANT"]).optional().describe("Sort order for post comments. Defaults to MOST_RECENT."),
+  comment_id: external_exports.string().min(1).optional().describe(
+    "If set, returns replies to this comment instead of top-level comments. LinkedIn: use the comment `id` from the comments list."
+  )
 };
 var listPostCommentsSchema = external_exports.object(listPostCommentsToolShape);
 async function handleListPostComments(bridge, input) {
-  const { account_id, post_id, limit } = listPostCommentsSchema.parse(input);
-  return bridge.listPostComments(post_id, account_id, limit);
+  const { account_id, post_id, limit, cursor, sort_by, comment_id } = listPostCommentsSchema.parse(input);
+  return bridge.listPostComments(post_id, account_id, {
+    limit,
+    cursor,
+    sort_by,
+    comment_id
+  });
 }
 
 // src/tools/content/list-post-reactions.ts
