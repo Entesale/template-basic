@@ -21017,6 +21017,7 @@ var StdioServerTransport = class {
 // src/index.ts
 var ENV_BASE = "CONVEX_AGENT_MCP_URL";
 var ENV_TOKEN = "CONVEX_AGENT_TOKEN";
+var MODEL_TIER_VALUES = ["common", "intelligent", "superBrain"];
 var scheduleTaskShape = {
   name: external_exports.string().min(1).describe("Short human-readable label for the scheduled task."),
   prompt: external_exports.string().min(1).describe(
@@ -21049,9 +21050,28 @@ function getEnv(name) {
   }
   return value;
 }
-async function postSchedule(input) {
+async function postJson(path, body) {
   const base = getEnv(ENV_BASE).replace(/\/$/, "");
   const token = getEnv(ENV_TOKEN);
+  const res = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(body)
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${path} ${res.status}: ${text}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+async function postSchedule(input) {
   const body = input.schedule.kind === "once" ? {
     name: input.name,
     prompt: input.prompt,
@@ -21065,23 +21085,55 @@ async function postSchedule(input) {
     chatId: input.chatId,
     modelTier: input.modelTier
   };
-  const res = await fetch(`${base}/tasks/schedule`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify(body)
+  return postJson("/tasks/schedule", body);
+}
+var updateCompanyShape = {
+  name: external_exports.string().min(1).optional().describe("Display name of the organization. Omit to leave unchanged."),
+  description: external_exports.string().optional().describe(
+    "Short markdown description: what the company does, one to three sentences. Omit to leave unchanged."
+  ),
+  offers: external_exports.string().optional().describe(
+    "Long-form markdown company knowledge: offer / ICP / personas / buying signals / objections. This is your primary brain about the business and is injected verbatim into your system prompt going forward. Replace wholesale on each call (no partial merge)."
+  )
+};
+var updateCompanySchema = external_exports.object(updateCompanyShape);
+async function postUpdateCompany(input) {
+  return postJson("/company/update", {
+    name: input.name,
+    description: input.description,
+    offers: input.offers
   });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`scheduleTask ${res.status}: ${text}`);
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
+}
+var updateAgentShape = {
+  name: external_exports.string().min(1).optional().describe("Your display name (the campaign / agent name shown to the operator). Omit to leave unchanged."),
+  description: external_exports.string().optional().describe("One-line description of your role on the team. Omit to leave unchanged."),
+  systemPrompt: external_exports.string().optional().describe(
+    "Your full new identity / system prompt. This is appended as a new version of agentConfigs and used on every subsequent turn. Replace wholesale on each call."
+  ),
+  dzenMode: external_exports.boolean().optional().describe(
+    "Set false when you judge onboarding is finished and the operator should see the full app (sidebar, agent picker, workspace). Set true to re-enter focus mode."
+  ),
+  modelTierDefault: external_exports.enum(MODEL_TIER_VALUES).optional().describe("Default model tier for new turns on this agent.")
+};
+var updateAgentSchema = external_exports.object(updateAgentShape);
+async function postUpdateAgent(input) {
+  return postJson("/agent/update", input);
+}
+var createAgentShape = {
+  name: external_exports.string().min(1).optional().describe(
+    "Display name for the new agent / campaign. Omit to use the template's default."
+  ),
+  templateSlug: external_exports.enum(["basic", "hypothesis-testing"]).optional().describe(
+    "Which template to seed the new agent from. Defaults to the system default (hypothesis-testing)."
+  ),
+  modelTierDefault: external_exports.enum(MODEL_TIER_VALUES).optional().describe("Default model tier for the new agent's turns."),
+  dzenMode: external_exports.boolean().optional().describe(
+    "Whether the new agent starts in focus mode. Defaults to true so onboarding owns the screen."
+  )
+};
+var createAgentSchema = external_exports.object(createAgentShape);
+async function postCreateAgent(input) {
+  return postJson("/agent/create", input);
 }
 async function main() {
   const server = new McpServer({ name: "convex-mcp", version: "0.1.0" });
@@ -21094,6 +21146,54 @@ async function main() {
     async (args) => {
       const input = scheduleTaskSchema.parse(args);
       const result = await postSchedule(input);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(result, null, 2) }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "convex_update_company_details",
+    {
+      description: "Persist what you've learned about the operator's company. Patches name / description / offers on the organization row; provided fields replace the stored value wholesale, omitted fields are left unchanged. The `offers` field is your long-form company knowledge (ICP, personas, buying signals, objections) and is injected into your future system prompts \u2014 write it as if you'll re-read it next session.",
+      inputSchema: updateCompanyShape
+    },
+    async (args) => {
+      const input = updateCompanySchema.parse(args);
+      const result = await postUpdateCompany(input);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(result, null, 2) }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "convex_update_agent_details",
+    {
+      description: "Patch your own agent row: name, description, system prompt (appended as a new agentConfigs version), default model tier, and dzen-mode flag. Use this to refine your own identity as you understand the campaign better, or to exit focus mode when onboarding is finished (dzenMode=false). Provided fields replace the stored value wholesale.",
+      inputSchema: updateAgentShape
+    },
+    async (args) => {
+      const input = updateAgentSchema.parse(args);
+      const result = await postUpdateAgent(input);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(result, null, 2) }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "convex_create_agent",
+    {
+      description: "Create a sibling agent (= new campaign) in the same organization. Returns { agentId, chatId }. Use when the operator wants to run a separate hypothesis or audience as its own campaign rather than reusing this thread. The new agent is seeded from the named template (default: hypothesis-testing) and starts in focus mode so its own onboarding can proceed.",
+      inputSchema: createAgentShape
+    },
+    async (args) => {
+      const input = createAgentSchema.parse(args);
+      const result = await postCreateAgent(input);
       return {
         content: [
           { type: "text", text: JSON.stringify(result, null, 2) }
