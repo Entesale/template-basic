@@ -1,0 +1,1 @@
+../../../../../mcps/channels/dist/index.cjs

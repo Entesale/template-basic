@@ -1,0 +1,1 @@
+../../../../../mcps/entesale/dist/index.cjs
